@@ -1,0 +1,111 @@
+# Сборка установщиков MeshRoom.
+# Запуск: пуш тега v* (например v0.2.0) — соберёт и приложит установщики к релизу.
+# Или вручную: Actions → Release → Run workflow (артефакты без релиза).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  WINTUN_VERSION: "0.14.1"
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Version from tag
+        id: ver
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Embed icon into exe (rsrc)
+        shell: bash
+        run: |
+          go run github.com/akavel/rsrc@v0.10.2 \
+            -ico build/windows/icon.ico \
+            -o cmd/meshroom/rsrc_windows_amd64.syso
+
+      - name: Build meshroom.exe
+        shell: bash
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build \
+            -ldflags "-H windowsgui -s -w" -o dist/meshroom.exe ./cmd/meshroom
+
+      - name: Download Wintun
+        shell: bash
+        run: |
+          curl -fsSL -o wintun.zip "https://www.wintun.net/builds/wintun-${WINTUN_VERSION}.zip"
+          unzip -j wintun.zip "wintun/bin/amd64/wintun.dll" -d build/windows/
+
+      - name: Build installer (Inno Setup)
+        shell: cmd
+        run: |
+          "%ProgramFiles(x86)%\Inno Setup 6\iscc.exe" /DAppVersion=${{ steps.ver.outputs.version }} build\windows\meshroom.iss
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: dist/MeshRoom-*-windows-setup.exe
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Version from tag
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=0.0.0-dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build .app and .dmg
+        run: |
+          chmod +x build/macos/make-app.sh
+          build/macos/make-app.sh "${{ steps.ver.outputs.version }}" universal
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: dist/MeshRoom-*-macos.dmg
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/MeshRoom-*-windows-setup.exe
+            dist/MeshRoom-*-macos.dmg
+          generate_release_notes: true

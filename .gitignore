@@ -1,0 +1,6 @@
+/meshroom
+/meshroom.exe
+/dist/
+*.syso
+*.output
+.DS_Store
