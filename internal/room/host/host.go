@@ -78,10 +78,30 @@ func New(info *store.RoomInfo, selfPeer proto.Peer, events Events) *Host {
 
 func chatFile(roomID string) string { return "chat-" + roomID + ".json" }
 
-// Start начинает слушать control-порт. При ControlPort==0 выбирает свободный.
+// DefaultControlPort — фиксированный порт control-сервиса. Стабильный порт
+// нужен, чтобы проброс (автоматический или ручной на роутере) переживал
+// перезапуски. Если занят — берём следующий, затем случайный.
+const DefaultControlPort = 42600
+
+// Start начинает слушать control-порт. При ControlPort==0 пробует
+// стабильные порты 42600..42609, затем любой свободный.
 func (h *Host) Start() error {
-	addr := fmt.Sprintf("%s:%d", h.ListenHost, h.info.ControlPort)
-	ln, err := net.Listen("tcp", addr)
+	candidates := []int{h.info.ControlPort}
+	if h.info.ControlPort == 0 {
+		candidates = candidates[:0]
+		for p := DefaultControlPort; p < DefaultControlPort+10; p++ {
+			candidates = append(candidates, p)
+		}
+		candidates = append(candidates, 0) // fallback: случайный
+	}
+	var ln net.Listener
+	var err error
+	for _, p := range candidates {
+		ln, err = net.Listen("tcp", fmt.Sprintf("%s:%d", h.ListenHost, p))
+		if err == nil {
+			break
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}

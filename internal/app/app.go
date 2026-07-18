@@ -34,6 +34,8 @@ type roomRT struct {
 	client    *client.Client
 	relaySrv  *relay.Server // не nil у хоста
 	portMap   *nat.PortMapper
+	portMapUDP *nat.PortMapper
+	extIP     string // внешний IP хоста (для ссылки-приглашения)
 	reachable string // "", "ok", "blocked" — доступность порта хоста снаружи
 	relayAddr string // адрес relay хоста (у участника — из JoinOK)
 	peers     []proto.Peer
@@ -213,13 +215,18 @@ func (a *App) startHost(info *store.RoomInfo) error {
 		return err
 	}
 	// relay-сервер хоста: общая точка пересылки WG-трафика, когда прямой
-	// путь между двумя участниками установить не удалось
-	relaySrv, err := relay.NewServer(0)
+	// путь между двумя участниками установить не удалось. Порт — тот же
+	// номер, что у TCP-комнаты (протоколы разные, не конфликтуют): при
+	// ручном пробросе достаточно одного правила «порт N, TCP+UDP».
+	relaySrv, err := relay.NewServer(h.Port())
+	if err != nil {
+		relaySrv, err = relay.NewServer(0)
+	}
 	if err != nil {
 		log.Printf("app: relay server for %s not started: %v", info.Name, err)
 	} else {
 		h.SetRelay(relaySrv.Port(), "")
-		go a.mapRelayPort(rid, relaySrv.Port(), h)
+		go a.mapHostPorts(rid, h.Port(), relaySrv.Port(), h)
 	}
 	a.mu.Lock()
 	rt := &roomRT{info: info, host: h, relaySrv: relaySrv, connected: true, chat: h.Chat(), peers: h.Peers()}
@@ -229,31 +236,41 @@ func (a *App) startHost(info *store.RoomInfo) error {
 	return nil
 }
 
-// mapRelayPort в фоне пробрасывает UDP-порт relay наружу (UPnP/NAT-PMP) и
-// определяет внешний IP через STUN, чтобы участники из интернета могли
-// достучаться до relay хоста.
-func (a *App) mapRelayPort(rid string, port int, h *host.Host) {
-	pm := nat.NewPortMapper(nat.UDP, port)
-	res := pm.Start()
+// mapHostPorts в фоне пробрасывает наружу оба порта хоста — TCP (вход в
+// комнату, чат) и UDP (relay), определяет внешний IP и сохраняет внешний
+// адрес: он попадает в ссылку-приглашение и в адрес relay для участников
+// из интернета.
+func (a *App) mapHostPorts(rid string, tcpPort, udpPort int, h *host.Host) {
+	pmTCP := nat.NewPortMapper(nat.TCP, tcpPort)
+	resTCP := pmTCP.Start()
+	pmUDP := nat.NewPortMapper(nat.UDP, udpPort)
+	resUDP := pmUDP.Start()
+
 	reach := "blocked"
-	if res.Success {
+	if resTCP.Success && resUDP.Success {
 		reach = "ok"
 	}
-	a.withRoom(rid, func(rt *roomRT) { rt.portMap = pm; rt.reachable = reach })
-	a.pushState()
 
 	extIP := ""
-	if res.Success && res.ExternalIP != nil {
-		extIP = res.ExternalIP.String()
+	if resTCP.Success && resTCP.ExternalIP != nil {
+		extIP = resTCP.ExternalIP.String()
 	}
 	if extIP == "" {
 		if ext, err := nat.ExternalAddr(0); err == nil {
 			extIP = ext.IP.String()
 		}
 	}
+
+	a.withRoom(rid, func(rt *roomRT) {
+		rt.portMap = pmTCP
+		rt.portMapUDP = pmUDP
+		rt.reachable = reach
+		rt.extIP = extIP
+	})
 	if extIP != "" {
-		h.SetRelay(port, extIP)
+		h.SetRelay(udpPort, extIP)
 	}
+	a.pushState()
 }
 
 // JoinRoom подключается к чужой комнате по ссылке-приглашению.
@@ -403,6 +420,9 @@ func (a *App) LeaveRoom(roomID string) error {
 	if rt.portMap != nil {
 		rt.portMap.Close()
 	}
+	if rt.portMapUDP != nil {
+		rt.portMapUDP.Close()
+	}
 	saved, _ := store.LoadRooms()
 	out := saved.Rooms[:0]
 	for _, r := range saved.Rooms {
@@ -454,11 +474,16 @@ func (a *App) Invite(roomID string) (string, error) {
 	if !ok || rt.host == nil {
 		return "", fmt.Errorf("invite is available only for your own rooms")
 	}
+	eps := proto.LanEndpoints(rt.host.Port())
+	// внешний адрес — первым: для друга из интернета рабочий именно он
+	if rt.extIP != "" {
+		eps = append([]string{fmt.Sprintf("%s:%d", rt.extIP, rt.host.Port())}, eps...)
+	}
 	inv := proto.Invite{
 		RoomID:    rt.info.ID,
 		RoomName:  rt.info.Name,
 		PSK:       rt.info.PSK,
-		Endpoints: proto.LanEndpoints(rt.host.Port()),
+		Endpoints: eps,
 	}
 	return inv.String(), nil
 }
@@ -522,6 +547,9 @@ func (a *App) Close() {
 		}
 		if rt.portMap != nil {
 			rt.portMap.Close()
+		}
+		if rt.portMapUDP != nil {
+			rt.portMapUDP.Close()
 		}
 	}
 	a.helper.Quit()

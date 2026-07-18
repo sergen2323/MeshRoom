@@ -295,11 +295,15 @@ function memberHTML(r, p) {
 
 // reachBanner — плашка диагностики доступности порта хоста снаружи.
 function reachBanner(r) {
-  if (r.role !== "host" || !r.reachable) return "";
+  if (r.role !== "host") return "";
+  if (!r.reachable) {
+    return `<div class="reach">${t("reachChecking")}</div>`;
+  }
   if (r.reachable === "ok") {
     return `<div class="reach ok">✓ ${t("reachOk")}</div>`;
   }
-  return `<div class="reach warn">⚠ ${t("reachBlocked")}</div>`;
+  const text = t("reachBlocked").replace("{port}", r.ctlPort || "?");
+  return `<div class="reach warn">⚠ ${esc(text)}</div>`;
 }
 
 function msgHTML(m) {

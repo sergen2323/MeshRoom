@@ -77,9 +77,12 @@ type UIRoom struct {
 	TunnelErr string       `json:"tunnelErr,omitempty"`
 	// Reachable — доступен ли хост-порт снаружи (только для роли host):
 	// "" неизвестно/не хост, "ok" порт проброшен, "blocked" — нет UPnP/NAT-PMP.
-	Reachable string       `json:"reachable,omitempty"`
-	Peers     []UIPeer     `json:"peers"`
-	Chat      []proto.Chat `json:"chat"`
+	Reachable string `json:"reachable,omitempty"`
+	// CtlPort/ExtIP — для инструкции по ручному пробросу порта у хоста.
+	CtlPort int          `json:"ctlPort,omitempty"`
+	ExtIP   string       `json:"extIp,omitempty"`
+	Peers   []UIPeer     `json:"peers"`
+	Chat    []proto.Chat `json:"chat"`
 }
 
 // UIState — полный снимок для интерфейса.
@@ -120,8 +123,12 @@ func (a *App) stateLocked() UIState {
 			TunnelIf:  rt.tunnelIf,
 			TunnelErr: rt.tunnelErr,
 			Reachable: rt.reachable,
+			ExtIP:     rt.extIP,
 			Peers:     []UIPeer{},
 			Chat:      rt.chat,
+		}
+		if rt.host != nil {
+			r.CtlPort = rt.host.Port()
 		}
 		for _, p := range rt.peers {
 			up := UIPeer{
