@@ -1,11 +1,11 @@
-# Сборка установщиков MeshRoom.
-# Запуск: пуш тега v* (например v0.2.0) — соберёт и приложит установщики к релизу.
-# Или вручную: Actions → Release → Run workflow (артефакты без релиза).
+# Автосборка релизов MeshRoom.
+# Каждый пуш в main: версия поднимается сама (v0.2.1 → v0.2.2 → ...),
+# собираются установщики Windows и macOS и публикуется GitHub-релиз.
 name: Release
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -15,7 +15,26 @@ env:
   WINTUN_VERSION: "0.14.1"
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Next version (auto-bump patch)
+        id: v
+        run: |
+          last=$(git tag -l 'v*' --sort=-v:refname | head -1)
+          last=${last:-v0.2.0}
+          IFS=. read -r major minor patch <<< "${last#v}"
+          echo "version=${major}.${minor}.$((patch+1))" >> "$GITHUB_OUTPUT"
+          echo "next version: ${major}.${minor}.$((patch+1)) (previous: $last)"
+
   windows:
+    needs: version
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,16 +42,6 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.23"
-
-      - name: Version from tag
-        id: ver
-        shell: bash
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=0.0.0-dev" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Embed icon into exe (rsrc)
         shell: bash
@@ -57,7 +66,7 @@ jobs:
       - name: Build installer (Inno Setup)
         shell: cmd
         run: |
-          "%ProgramFiles(x86)%\Inno Setup 6\iscc.exe" /DAppVersion=${{ steps.ver.outputs.version }} build\windows\meshroom.iss
+          "%ProgramFiles(x86)%\Inno Setup 6\iscc.exe" /DAppVersion=${{ needs.version.outputs.version }} build\windows\meshroom.iss
 
       - uses: actions/upload-artifact@v4
         with:
@@ -65,6 +74,7 @@ jobs:
           path: dist/MeshRoom-*-windows-setup.exe
 
   macos:
+    needs: version
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -73,19 +83,10 @@ jobs:
         with:
           go-version: "1.23"
 
-      - name: Version from tag
-        id: ver
-        run: |
-          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-            echo "version=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=0.0.0-dev" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Build .app and .dmg
         run: |
           chmod +x build/macos/make-app.sh
-          build/macos/make-app.sh "${{ steps.ver.outputs.version }}" universal
+          build/macos/make-app.sh "${{ needs.version.outputs.version }}" universal
 
       - uses: actions/upload-artifact@v4
         with:
@@ -93,8 +94,7 @@ jobs:
           path: dist/MeshRoom-*-macos.dmg
 
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [windows, macos]
+    needs: [version, windows, macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -102,9 +102,11 @@ jobs:
           merge-multiple: true
           path: dist
 
-      - name: Create GitHub Release
+      - name: Publish release v${{ needs.version.outputs.version }}
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ needs.version.outputs.version }}
+          name: MeshRoom ${{ needs.version.outputs.version }}
           files: |
             dist/MeshRoom-*-windows-setup.exe
             dist/MeshRoom-*-macos.dmg
