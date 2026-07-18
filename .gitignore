@@ -1,6 +1,7 @@
 /meshroom
 /meshroom.exe
 /dist/
+/.cache-tmp/
 *.syso
 *.output
 .DS_Store

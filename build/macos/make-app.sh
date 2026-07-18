@@ -14,8 +14,12 @@ rm -rf "$APP"
 
 echo "==> building binaries ($ARCH)"
 cd "$ROOT"
-build_one() { # goarch outfile
-  CGO_ENABLED=0 GOOS=darwin GOARCH="$1" go build -mod=mod -buildvcs=false \
+build_one() { # goarch outfile — cgo обязателен: нативное окно (WKWebView)
+  local carch="arm64"
+  [ "$1" = "amd64" ] && carch="x86_64"
+  CGO_ENABLED=1 GOOS=darwin GOARCH="$1" \
+    CGO_CFLAGS="-arch $carch" CGO_CXXFLAGS="-arch $carch" CGO_LDFLAGS="-arch $carch" \
+    go build -mod=mod -buildvcs=false \
     -ldflags "-s -w" -o "$2" ./cmd/meshroom
 }
 case "$ARCH" in

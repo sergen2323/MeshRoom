@@ -45,7 +45,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build \
+          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 go build \
             -ldflags "-H windowsgui -s -w" -o dist/meshroom.exe ./cmd/meshroom
 
       - name: Download Wintun
